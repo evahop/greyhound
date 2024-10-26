@@ -1,24 +1,81 @@
 const std = @import("std");
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    var stream = try std.net.connectUnixSocket("/run/user/1000/bus");
+    defer stream.close();
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    var bw = std.io.bufferedWriter(stream.writer());
+    const writer = bw.writer();
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    //
+    // Auth
+    //
 
-    try bw.flush(); // don't forget to flush!
-}
+    _ = try writer.write("\x00AUTH EXTERNAL 31303030\r\nBEGIN\r\n");
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+    //
+    // Header
+    //
+
+    try writer.writeByte('l'); // endian
+    try writer.writeByte(1); // type
+    try writer.writeByte(0); // flags
+    try writer.writeByte(1); // version
+    try writer.writeInt(u32, 0, .little); // body length
+    try writer.writeInt(u32, 1, .little); // cookie
+
+    //
+    // Fields
+    //
+
+    try writer.writeInt(u32, 77, .little); // field length
+
+    //
+    // Path
+    //
+
+    const path = "/org/freedesktop/DBus";
+    try writer.writeByte(1);
+    try writer.writeByte(1);
+    try writer.writeByte('o');
+    try writer.writeByte(0);
+    try writer.writeInt(u32, path.len, .little);
+    _ = try writer.write(path);
+    try writer.writeByte(0);
+    try writer.writeByteNTimes(0, 2); // padding
+
+    //
+    // Member
+    //
+
+    const method = "Hello";
+    try writer.writeByte(3);
+    try writer.writeByte(1);
+    try writer.writeByte('s');
+    try writer.writeByte(0);
+    try writer.writeInt(u32, method.len, .little);
+    _ = try writer.write(method);
+    try writer.writeByte(0);
+    try writer.writeByteNTimes(0, 2); // padding
+
+    //
+    // Destination
+    //
+
+    const dest = "org.freedesktop.DBus";
+    try writer.writeByte(6);
+    try writer.writeByte(1);
+    try writer.writeByte('s');
+    try writer.writeByte(0);
+    try writer.writeInt(u32, dest.len, .little);
+    _ = try writer.write(dest);
+    try writer.writeByte(0);
+    try writer.writeByteNTimes(0, 3); // padding
+
+    try bw.flush();
+
+    var buf: [std.mem.page_size]u8 = undefined;
+    const len = try stream.reader().read(&buf);
+
+    std.debug.print("{s}\n", .{buf[0..len]});
 }
